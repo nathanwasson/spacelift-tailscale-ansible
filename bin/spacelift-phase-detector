@@ -1,0 +1,59 @@
+#!/bin/bash
+#
+# Advanced Spacelift phase detector for automatic Tailscale management
+# Detects Spacelift phases and manages Tailscale lifecycle accordingly
+#
+
+[[ "$TRACE" ]] && set -o xtrace
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# Detect if we're in a Spacelift phase that needs networking
+detect_spacelift_phase() {
+    # Check for Spacelift-specific environment variables
+    if [[ -n ${SPACELIFT_STACK_ID:-} ]] || [[ -n ${TF_VAR_spacelift_stack_id:-} ]]; then
+        return 0  # We're in Spacelift
+    fi
+    
+    # Check command line arguments for Terraform/Pulumi/etc commands
+    local cmd_args="$*"
+    if [[ "$cmd_args" =~ (terraform|tofu|pulumi|kubectl|ansible) ]]; then
+        return 0  # Command that might need networking
+    fi
+    
+    return 1  # Not a phase that needs networking
+}
+
+# Check if the command is a networking-sensitive operation
+needs_networking() {
+    local cmd_args="$*"
+    
+    # Commands that typically need network access to private resources
+    if [[ "$cmd_args" =~ (plan|apply|destroy|refresh|import|state|show|output) ]]; then
+        return 0
+    fi
+    
+    # Pulumi operations
+    if [[ "$cmd_args" =~ (up|preview|destroy|refresh|import|stack) ]]; then
+        return 0
+    fi
+    
+    # Kubernetes operations
+    if [[ "$cmd_args" =~ (apply|create|delete|get|describe) ]]; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Main detection logic
+main() {
+    if detect_spacelift_phase && needs_networking "$@"; then
+        echo "ENABLE_TAILSCALE"
+    else
+        echo "SKIP_TAILSCALE"
+    fi
+}
+
+main "$@"

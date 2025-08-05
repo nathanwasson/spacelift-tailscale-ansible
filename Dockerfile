@@ -22,7 +22,14 @@ COPY bin/ /usr/local/bin/
 COPY --from=builder /go/bin/get-authkey /usr/local/bin/get-authkey
 RUN chmod +x /usr/local/bin/get-authkey
 
+# Copy automated entrypoint script
+COPY bin/spacelift-tailscale-entrypoint /usr/local/bin/spacelift-tailscale-entrypoint
+RUN chmod +x /usr/local/bin/spacelift-tailscale-entrypoint
+
 # Let tailscale/d use default socket location
 RUN mkdir -p /home/spacelift/.local/share/tailscale /var/run/tailscale && chown spacelift:spacelift /home/spacelift/.local/share/tailscale /var/run/tailscale
 
 USER spacelift
+
+# Set automated entrypoint that wraps Spacelift's default behavior
+ENTRYPOINT ["/usr/local/bin/spacelift-tailscale-entrypoint"]

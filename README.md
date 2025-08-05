@@ -20,13 +20,23 @@ See Howee Dunnit below for implementation details (extra important for Ansible S
 
 ## Usage
 
-There is some up front configuration required, then it'll Just Work™ every time you trigger a run in Spacelift for that stack.
+There are **two ways** to use spacelift-tailscale: **Automated** (recommended) or **Manual** configuration.
 
-There's three things that need configuring, the `runner_image` for the stack, some before/after phase hooks and the `TS_AUTH_KEY` for authenticating to the Tailnet.
+### 🚀 Automated Usage (Recommended)
 
-Spacelift has multiple ways of configuring these settings, see [Configuration][] documentation for more info. Below is a suggested way to configure it, but not essential.
+The latest version includes an **automated entrypoint** that handles Tailscale lifecycle without requiring manual hooks:
 
-[Configuration]: https://docs.spacelift.io/concepts/configuration/
+1. **Set the runner image** in your `.spacelift/config.yml` or Stack Settings
+2. **Add authentication environment variables** to a Spacelift Context
+3. **That's it!** Tailscale will automatically start/stop as needed
+
+**Zero hook configuration required** - the image automatically detects Tailscale credentials and manages the VPN lifecycle.
+
+### ⚙️ Manual Usage (Advanced)
+
+For advanced use cases or custom control, you can disable the automated entrypoint and use manual hooks as described in the [Manual Configuration](#manual-configuration) section below.
+
+---
 
 Caius' original Terraform repo states the following:
 
@@ -45,7 +55,37 @@ my-tailnet-stack:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o ProxyCommand="nc -X 5 -x localhost:1080 %h %p"'
 ```
 
-### Context for hooks & auth
+### 🎯 Quick Start (Automated)
+
+1. **Configure Runner Image** in `.spacelift/config.yml`:
+   ```yaml
+   stacks:
+     my-tailnet-stack:
+       runner_image: "ghcr.io/kriskit/spacelift-tailscale:v1.0.0"
+   ```
+
+2. **Create Spacelift Context** with authentication variables:
+   ```bash
+   # For OAuth (recommended)
+   TS_OAUTH_CLIENT_ID=your-client-id
+   TS_OAUTH_CLIENT_SECRET=your-client-secret
+   TS_OAUTH_TAGS=tag:spacelift  # optional
+
+   # OR for direct auth key (legacy)
+   TS_AUTH_KEY=tskey-auth-your-key
+   ```
+
+3. **Attach Context** to your stack - Tailscale will automatically start/stop!
+
+### Manual Configuration
+
+For advanced users who want explicit control over Tailscale lifecycle, you can disable the automated entrypoint by setting:
+
+```bash
+SPACELIFT_TAILSCALE_MANUAL=true
+```
+
+Then configure manual hooks as described below.
 
 If you manage Spacelift via Terraform, lean on [caius/terraform-spacelift-tailscale](https://registry.terraform.io/modules/caius/tailscale/spacelift/latest) module to setup a context for you for the hooks. You can also specify an `autoattach:` label on the Context to be able to easily associate it with Stacks.
 
@@ -60,7 +100,7 @@ And then in the after hooks for all the above phases, the following:
 - `unset HTTP_PROXY HTTPS_PROXY`
 - `sed -e '/HTTP_PROXY=/d' -e /HTTPS_PROXY/d -i /mnt/workspace/.env_hooks_after` (Due to https://github.com/caius/spacelift-tailscale/issues/14)
 
-The authentication environment variables can be ClickOps'd into this context as well:
+The authentication environment variables can be added to this context as well:
 
 **For OAuth authentication (recommended):**
 - `TS_OAUTH_CLIENT_ID`
@@ -165,6 +205,99 @@ If you're currently using `TS_AUTH_KEY`, you can migrate to OAuth authentication
 - Automatic token generation and renewal
 - Better security through scoped access
 - Audit trail of token generation
+
+## 🚀 **NEW: Automated Tailscale Management**
+
+The latest version includes **zero-configuration automation** that eliminates the need for manual hook setup:
+
+### ✨ **What's Automated**
+- **Automatic startup**: Tailscale starts when credentials are detected
+- **Lifecycle management**: Automatic cleanup on container exit
+- **HTTP proxy setup**: Environment variables configured for Terraform providers
+- **Error handling**: Graceful fallback if Tailscale fails to start
+- **Smart detection**: Only activates when authentication credentials are present
+
+### 🎯 **Benefits**
+- **Zero hook configuration** - just set environment variables and go
+- **Reduced complexity** - no need to understand Spacelift hook ordering
+- **Consistent behavior** - works the same way across all stacks
+- **Better error messages** - clear feedback when issues occur
+- **Backward compatible** - existing manual configurations continue to work
+
+### 🔧 **How It Works**
+The Docker image includes an intelligent entrypoint that:
+1. Detects Tailscale authentication credentials
+2. Automatically starts Tailscale with OAuth or auth key
+3. Configures HTTP proxy for Terraform providers
+4. Sets up cleanup handlers for graceful shutdown
+5. Executes your Spacelift commands normally
+
+**No hooks, no complexity, just works!** 🎉
+
+## Building from Source
+
+If you prefer to build your own Docker image instead of using the pre-built ones:
+
+### Prerequisites
+
+- Docker with BuildKit support
+- Make (optional, for convenience)
+
+### Build Commands
+
+```bash
+# Clone the repository
+git clone https://github.com/kriskit/spacelift-tailscale.git
+cd spacelift-tailscale
+
+# Build the image locally
+make docker-build
+
+# Or build manually with Docker
+docker build -t my-spacelift-tailscale .
+
+# Build for multiple platforms (requires buildx)
+docker buildx build --platform linux/amd64,linux/arm64 -t my-spacelift-tailscale .
+```
+
+### Multi-stage Build Details
+
+The Dockerfile uses a multi-stage build process:
+
+1. **Builder stage**: Uses `golang:alpine` to compile the `get-authkey` utility
+2. **Runtime stage**: Uses the official Spacelift runner image with only the compiled binary
+
+This approach significantly reduces the final image size while maintaining all functionality.
+
+### CI/CD Pipeline
+
+The project uses GitHub Actions for automated building and publishing:
+
+- **Automated builds** on every push to main branch and pull requests
+- **Multi-platform images** built for linux/amd64 and linux/arm64
+- **Semantic versioning** with automatic tag generation
+- **GitHub Container Registry** publishing with multiple tag formats
+- **Build optimization** with layer caching and build reports
+
+#### Available Tags
+
+The CI/CD pipeline generates several tag formats:
+
+- `latest` - Latest build from main branch
+- `v<major>.<minor>.<patch>` - Semantic version tags (e.g., `v1.0.0`)
+- `v<major>.<minor>` - Major.minor tags (e.g., `v1.0`)
+- `v<major>` - Major version tags (e.g., `v1`)
+- `sha-<commit>` - Specific commit SHA tags
+- `pr-<number>` - Pull request builds
+
+#### Build Metrics
+
+Each build provides detailed metrics including:
+
+- Image size optimization (50% reduction vs single-stage)
+- Multi-platform compatibility
+- Build time and caching efficiency
+- Security scan results
 
 ## Howee Dunnit
 

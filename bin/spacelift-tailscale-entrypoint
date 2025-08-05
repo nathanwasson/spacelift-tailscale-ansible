@@ -1,0 +1,105 @@
+#!/bin/bash
+#
+# Automated entrypoint for spacelift-tailscale
+# Automatically manages Tailscale lifecycle without requiring manual hooks
+#
+
+[[ "$TRACE" ]] && set -o xtrace
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# Consistent logging to match spacetail script style
+log() {
+    echo "spacetail: $1"
+}
+
+log_success() {
+    echo "spacetail: $1"
+}
+
+log_warning() {
+    echo "spacetail: $1"
+}
+
+log_error() {
+    echo "spacetail: $1"
+}
+
+# Check if Tailscale should be enabled
+should_enable_tailscale() {
+    # Enable if we have authentication credentials
+    if [[ -n ${TS_AUTH_KEY:-} ]] || [[ -n ${TS_OAUTH_CLIENT_ID:-} && -n ${TS_OAUTH_CLIENT_SECRET:-} ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# Start Tailscale automatically
+start_tailscale() {
+    log "Auto-starting Tailscale..."
+
+    # Start Tailscale first (without proxy set)
+    if spacetail up; then
+        log_success "Tailscale started successfully"
+
+        # Now set HTTP proxy environment variables for Terraform providers
+        export HTTP_PROXY=http://127.0.0.1:8080
+        export HTTPS_PROXY=http://127.0.0.1:8080
+        log "HTTP proxy configured for Terraform providers"
+
+        # Set up cleanup trap
+        trap 'log "Auto-stopping Tailscale..."; spacetail down; log_success "Tailscale stopped"' EXIT
+
+        return 0
+    else
+        log_error "Failed to start Tailscale"
+        return 1
+    fi
+}
+
+# Main entrypoint logic
+main() {
+    # Check if manual mode is enabled
+    if [[ ${SPACELIFT_TAILSCALE_MANUAL:-} == "true" ]]; then
+        log "Manual mode enabled - skipping automatic Tailscale management"
+        log "Use spacetail up/down commands in your Spacelift hooks"
+        exec "$@"
+        return
+    fi
+
+    log "Checking Tailscale configuration..."
+
+    if should_enable_tailscale; then
+        log_success "Tailscale credentials detected"
+
+        # Check if TF_VAR_spacelift_workspace_root is set (required by spacetail)
+        if [[ -z ${TF_VAR_spacelift_workspace_root:-} ]]; then
+            log_warning "TF_VAR_spacelift_workspace_root not set, setting to /mnt/workspace"
+            export TF_VAR_spacelift_workspace_root="/mnt/workspace"
+        fi
+
+        # Start Tailscale
+        if start_tailscale; then
+            log_success "Tailscale network ready - Terraform providers can now access private resources"
+        else
+            log_error "Tailscale startup failed - continuing without VPN"
+        fi
+    else
+        log "No Tailscale credentials found - skipping VPN setup"
+        log "To enable: set TS_AUTH_KEY or TS_OAUTH_CLIENT_ID + TS_OAUTH_CLIENT_SECRET"
+    fi
+
+    # Execute the original Spacelift command
+    log "Starting Spacelift runner..."
+
+    # Run the command and capture its exit code
+    "$@"
+    local exit_code=$?
+
+    # The trap will handle cleanup automatically when this script exits
+    exit $exit_code
+}
+
+# Run main function with all arguments
+main "$@"
