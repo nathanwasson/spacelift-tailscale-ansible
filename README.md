@@ -1,15 +1,22 @@
-# Spacelift 💖 Tailscale
+# Spacelift (Ansible) 💖 Tailscale
 
-Puts [Tailscale][] into [Spacelift][], for accessing things on the tailnet from Terraform, etc easily.
+Puts [Tailscale][] into [Spacelift][], for accessing things on the tailnet from Ansible, etc easily.
 
 [Tailscale]: https://tailscale.com/
 [Spacelift]: https://spacelift.io/
 
-Based on the base AWS spacelift image, with tailscale added to save re-downloading every run.
+The original commands defined in your Spacelift workflow are still invoked by Spacelift, we just wrap some setup/teardown around them for Tailscale.
 
-The Readme is written mentioning Terraform but it will work out the box for OpenTofu, Pulumi, Ansible, etc as well. The original commands defined in your Spacelift workflow are still invoked by Spacelift, we just wrap some setup/teardown around them for Tailscale.
+This is a fork of [caius/spacelift-tailscale](https://github.com/caius/spacelift-tailscale) with the Dockerfile modified to use Spacelift's [runner-ansible image](https://github.com/spacelift-io/runner-ansible) instead of Spacelift's [runner-terraform image](https://github.com/spacelift-io/runner-terraform). 
 
-See Howee Dunnit below for implementation details.
+The Dockerfile has also been modified to layer on a handful of extra packages in addition to `tailscale` to make the integration with Tailscale work out of the box.
+
+Additional packages:
+
+- `bash` (for the `spacetail` script)
+- `netcat-openbsd` (for Ansible's SSH connection type)
+
+See Howee Dunnit below for implementation details (extra important for Ansible SSH connections!).
 
 ## Usage
 
@@ -21,15 +28,28 @@ Spacelift has multiple ways of configuring these settings, see [Configuration][]
 
 [Configuration]: https://docs.spacelift.io/concepts/configuration/
 
-This mechanism relies on Terraform providers using HTTP libraries that pay attention to the `http_proxy` environment variable for using a HTTP Proxy to communicate via. The default `net/http` library in Golang's stdlib does pay attention to this, so providers like `hashicorp/nomad` Just Work™ by pointing at the tailscale MagicDNS hostname of a nomad server.
+Caius' original Terraform repo states the following:
 
-(If you're using Tailscale Serve to expose the endpoint the terraform provider needs the full MagicDNS hostname, including the Tailscale domain.)
+> This mechanism relies on Terraform providers using HTTP libraries that pay attention to the `http_proxy` environment variable for using a HTTP Proxy to communicate via. The default `net/http` library in Golang's stdlib does pay attention to this, so providers like `hashicorp/nomad` Just Work™ by pointing at the tailscale MagicDNS hostname of a nomad server.
+
+> (If you're using Tailscale Serve to expose the endpoint the Terraform provider needs the full MagicDNS hostname, including the Tailscale domain.)
+
+However, if you're using Ansible to connect over Tailscale to a host via SSH, you'll need to set a ProxyCommand in your Ansible inventory file to use the SOCKS5 proxy. The Dockerfile has been modified to install `netcat-openbsd` to make this possible, as the default BusyBox `nc` does not support the `-x` flag. For example, in your inventory file you could set:
+
+```yaml
+my-tailnet-stack:
+  hosts:
+    my-host: <tailnet-ip-address>
+  vars
+    ansible_connection: ssh
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o ProxyCommand="nc -X 5 -x localhost:1080 %h %p"'
+```
 
 ### Context for hooks & auth
 
 If you manage Spacelift via Terraform, lean on [caius/terraform-spacelift-tailscale](https://registry.terraform.io/modules/caius/tailscale/spacelift/latest) module to setup a context for you for the hooks. You can also specify an `autoattach:` label on the Context to be able to easily associate it with Stacks.
 
-Otherwise you'll need to create a Spacelift Context in the UI and define the following hooks for the before phases (plan/perform/apply/destroy):
+Otherwise you'll need to create a Spacelift Context in the UI and define the following hooks for the before phases (plan/perform/apply/destroy) (apply and destroy do not apply to Ansible):
 
 - `spacetail up`
 - `trap 'spacetail down' EXIT`
@@ -46,14 +66,14 @@ The `TS_AUTH_KEY` environment variable below can be ClickOps'd into this context
 
 The `runner_image` needs configuring through either `.spacelift/config.yml` or the Spacelift Stack Settings UI.
 
-Firstly the `runner_image` needs setting to `ghcr.io/caius/spacelift-tailscale:latest` (or pin a specific SHA[^1] instead of `latest` to control updates.)
+Firstly the `runner_image` needs setting to `ghcr.io/nathanwasson/spacelift-tailscale-ansible:latest` (or pin a specific SHA[^1] instead of `latest` to control updates.)
 
-[^1]: <https://github.com/caius/spacelift-tailscale/pkgs/container/spacelift-tailscale/versions?filters%5Bversion_type%5D=tagged> lists all available SHA tags for the image.
+[^1]: <https://github.com/nathanwasson/spacelift-tailscale-ansible/pkgs/container/spacelift-tailscale-ansible/versions?filters%5Bversion_type%5D=tagged> lists all available SHA tags for the image.
 
 ```yaml
 stacks:
   my-tailnet-stack:
-    runner_image: "ghcr.io/caius/spacelift-tailscale:latest"
+    runner_image: "ghcr.io/nathanwasson/spacelift-tailscale-ansible:latest"
 ```
 
 ### Tailnet Authentication
