@@ -1,11 +1,13 @@
 name: "Build Image"
 
 on:
-  pull_request: {}
+  pull_request:
+    branches: [ "main" ]
+    types: [ opened, synchronize, reopened ]
+    paths: [ "Dockerfile", "bin/**" ]
   push:
-    branches:
-      - "main"
-  workflow_dispatch: {}
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -42,7 +44,7 @@ jobs:
             # Latest for main branch
             type=raw,enable={{is_default_branch}},priority=1,value=latest
 
-      - uses: "docker/build-push-action@v5"
+      - uses: "docker/build-push-action@v6"
         with:
           context: "."
           platforms: "linux/amd64,linux/arm64"
