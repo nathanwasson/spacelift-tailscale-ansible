@@ -7,7 +7,7 @@ Puts [Tailscale][] into [Spacelift][], for accessing things on the tailnet from 
 
 The original commands defined in your Spacelift workflow are still invoked by Spacelift, we just wrap some setup/teardown around them for Tailscale.
 
-This is a fork of [caius/spacelift-tailscale](https://github.com/caius/spacelift-tailscale) with the Dockerfile modified to use Spacelift's [runner-ansible image](https://github.com/spacelift-io/runner-ansible) instead of Spacelift's [runner-terraform image](https://github.com/spacelift-io/runner-terraform). 
+This is a fork of [caius/spacelift-tailscale](https://github.com/caius/spacelift-tailscale) with the Dockerfile modified to use Spacelift's [runner-ansible image](https://github.com/spacelift-io/runner-ansible) instead of Spacelift's [runner-terraform image](https://github.com/spacelift-io/runner-terraform). This fork also adds OAuth authentication and automated Tailscale lifecycle management, pulling from [kriskit/spacelift-tailscale](https://github.com/kriskit/spacelift-tailscale).
 
 The Dockerfile has also been modified to layer on a handful of extra packages in addition to `tailscale` to make the integration with Tailscale work out of the box.
 
