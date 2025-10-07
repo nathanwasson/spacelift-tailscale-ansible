@@ -19,8 +19,9 @@ if [[ -z ${TF_VAR_spacelift_workspace_root:-} ]]; then
   exit 1
 fi
 
-if [[ -z ${TS_AUTH_KEY:-} ]]; then
-  echo "spacetail: TS_AUTH_KEY not set but expected"
+# Check for authentication credentials - either OAuth or direct auth key
+if [[ -z ${TS_AUTH_KEY:-} && ( -z ${TS_OAUTH_CLIENT_ID:-} || -z ${TS_OAUTH_CLIENT_SECRET:-} ) ]]; then
+  echo "spacetail: Either TS_AUTH_KEY or both TS_OAUTH_CLIENT_ID and TS_OAUTH_CLIENT_SECRET must be set"
   usage
   exit 1
 fi
@@ -46,6 +47,38 @@ readonly TS_TAILSCALED_EXTRA_ARGS
 
 if [[ "${ACTION}" = "up" ]]; then
   echo "spacetail: Bringing tailscale up"
+
+  # Generate auth key using OAuth if credentials are provided and TS_AUTH_KEY is not set
+  # This maintains backward compatibility: if TS_AUTH_KEY is already set, it takes priority
+  # If OAuth credentials are provided and no TS_AUTH_KEY exists, we generate one dynamically
+  if [[ -z ${TS_AUTH_KEY:-} && -n ${TS_OAUTH_CLIENT_ID:-} && -n ${TS_OAUTH_CLIENT_SECRET:-} ]]; then
+    echo "spacetail: Generating auth key using OAuth credentials"
+
+    # Set default tags if not provided
+    if [[ -z ${TS_OAUTH_TAGS:-} ]]; then
+      TS_OAUTH_TAGS="tag:spacelift"
+    fi
+
+    # Generate auth key using get-authkey utility
+    export TS_API_CLIENT_ID="${TS_OAUTH_CLIENT_ID}"
+    export TS_API_CLIENT_SECRET="${TS_OAUTH_CLIENT_SECRET}"
+
+    # Generate ephemeral, pre-authorized auth key by default
+    if ! TS_AUTH_KEY=$(get-authkey -ephemeral -preauth -tags "${TS_OAUTH_TAGS}" 2>&1); then
+      echo "spacetail: Failed to generate auth key using OAuth credentials"
+      echo "spacetail: get-authkey error: ${TS_AUTH_KEY}"
+      echo "spacetail: Please check your TS_OAUTH_CLIENT_ID and TS_OAUTH_CLIENT_SECRET"
+      echo "spacetail: Also ensure the OAuth client has the 'auth_keys' scope and appropriate tags"
+      exit 1
+    fi
+
+    if [[ -z ${TS_AUTH_KEY} ]]; then
+      echo "spacetail: get-authkey returned empty auth key"
+      exit 1
+    fi
+
+    echo "spacetail: Successfully generated auth key using OAuth"
+  fi
 
   # With massive thanks to containerboot
   # https://github.com/tailscale/tailscale/blob/main/cmd/containerboot/main.go

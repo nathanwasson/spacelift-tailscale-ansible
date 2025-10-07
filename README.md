@@ -7,7 +7,7 @@ Puts [Tailscale][] into [Spacelift][], for accessing things on the tailnet from 
 
 The original commands defined in your Spacelift workflow are still invoked by Spacelift, we just wrap some setup/teardown around them for Tailscale.
 
-This is a fork of [caius/spacelift-tailscale](https://github.com/caius/spacelift-tailscale) with the Dockerfile modified to use Spacelift's [runner-ansible image](https://github.com/spacelift-io/runner-ansible) instead of Spacelift's [runner-terraform image](https://github.com/spacelift-io/runner-terraform). 
+This is a fork of [caius/spacelift-tailscale](https://github.com/caius/spacelift-tailscale) with the Dockerfile modified to use Spacelift's [runner-ansible image](https://github.com/spacelift-io/runner-ansible) instead of Spacelift's [runner-terraform image](https://github.com/spacelift-io/runner-terraform). This fork also adds OAuth authentication, pulling from [kriskit/spacelift-tailscale](https://github.com/kriskit/spacelift-tailscale).
 
 The Dockerfile has also been modified to layer on a handful of extra packages in addition to `tailscale` to make the integration with Tailscale work out of the box.
 
@@ -22,7 +22,7 @@ See Howee Dunnit below for implementation details (extra important for Ansible S
 
 There is some up front configuration required, then it'll Just Work™ every time you trigger a run in Spacelift for that stack.
 
-There's three things that need configuring, the `runner_image` for the stack, some before/after phase hooks and the `TS_AUTH_KEY` for authenticating to the Tailnet.
+There are three things that need configuring, the `runner_image` for the stack, some before/after phase hooks and the credentials for authenticating to the Tailnet, whether they're OAuth credentials or a direct auth key.
 
 Spacelift has multiple ways of configuring these settings, see [Configuration][] documentation for more info. Below is a suggested way to configure it, but not essential.
 
@@ -60,7 +60,15 @@ And then in the after hooks for all the above phases, the following:
 - `unset HTTP_PROXY HTTPS_PROXY`
 - `sed -e '/HTTP_PROXY=/d' -e /HTTPS_PROXY/d -i /mnt/workspace/.env_hooks_after` (Due to https://github.com/caius/spacelift-tailscale/issues/14)
 
-The `TS_AUTH_KEY` environment variable below can be ClickOps'd into this context as well.
+The authentication environment variables can be added to this context as well:
+
+**For OAuth authentication (recommended):**
+- `TS_OAUTH_CLIENT_ID`
+- `TS_OAUTH_CLIENT_SECRET`
+- `TS_OAUTH_TAGS` (optional)
+
+**For direct auth key authentication:**
+- `TS_AUTH_KEY`
 
 ### Runner Image
 
@@ -82,17 +90,133 @@ Configuration is via various envariables in the Spacelift runner container, "ins
 
 [^2]: copied from. Build on the shoulders of giants, and be consistent.
 
+#### Option 1: OAuth Client Authentication (Recommended)
+
+This method uses OAuth client credentials to generate auth keys automatically, eliminating the need to manually rotate tokens every 90 days.
+
+Required configuration:
+
+- `TS_OAUTH_CLIENT_ID` - Tailscale OAuth client ID
+- `TS_OAUTH_CLIENT_SECRET` - Tailscale OAuth client secret
+
+Optional configuration:
+
+- `TS_OAUTH_TAGS` - Comma-separated list of tags to apply to generated auth keys (default: `tag:spacelift`)
+
+To set up OAuth authentication:
+
+1. Create an OAuth client in the [Tailscale admin console](https://login.tailscale.com/admin/settings/oauth)
+2. Grant the `auth_keys` scope and select appropriate tags (e.g., `tag:spacelift`)
+3. Copy the client ID and secret to your Spacelift context
+
+#### Option 2: Direct Auth Key (Legacy)
+
 Required configuration:
 
 - `TS_AUTH_KEY` - Tailscale auth key (Suggest creating ephemeral & tagged key)
 
-Optional configuration:
+**Note:** Auth keys expire after 90 days maximum and require manual rotation. Consider using OAuth authentication instead.
+
+#### Common Optional Configuration
 
 - `TS_EXTRA_ARGS` - Extra arguments to pass to `tailscale up`. eg, `--ssh` for debugging inside the spacelift container
 - `TS_TAILSCALED_EXTRA_ARGS` - Extra arguments to pass to `tailscaled`. eg, `--socks5-server=localhost:1081` to change socks5 port
 - `TRACE` - set to non-empty (eg, "1") to debug `spacetail` script
 
 As above we suggest setting these directly on the Context so any Stack you attach the Context to will be able to access the Tailnet.
+
+#### Environment Variables Summary
+
+| Variable | Required | Description | Default |
+|----------|----------|-------------|---------|
+| `TS_OAUTH_CLIENT_ID` | Yes (OAuth) | Tailscale OAuth client ID | - |
+| `TS_OAUTH_CLIENT_SECRET` | Yes (OAuth) | Tailscale OAuth client secret | - |
+| `TS_OAUTH_TAGS` | No | Tags for generated auth keys | `tag:spacelift` |
+| `TS_AUTH_KEY` | Yes (Legacy) | Direct Tailscale auth key | - |
+| `TS_EXTRA_ARGS` | No | Extra arguments for `tailscale up` | `--accept-dns=false --hostname=spacelift-$(hostname)` |
+| `TS_TAILSCALED_EXTRA_ARGS` | No | Extra arguments for `tailscaled` | `--socks5-server=localhost:1080 --outbound-http-proxy-listen=localhost:8080` |
+| `TRACE` | No | Enable debug logging | - |
+
+#### Migration from Auth Keys to OAuth
+
+If you're currently using `TS_AUTH_KEY`, you can migrate to OAuth authentication to eliminate manual token rotation:
+
+1. **Create OAuth Client**: In the [Tailscale admin console](https://login.tailscale.com/admin/settings/oauth), create a new OAuth client with:
+   - Scope: `auth_keys`
+   - Tags: Same tags you used for your manual auth keys (e.g., `tag:spacelift`)
+
+2. **Update Spacelift Context**: Replace your existing environment variables:
+   ```bash
+   # Remove (or keep as backup during migration)
+   # TS_AUTH_KEY=tskey-auth-...
+
+   # Add OAuth credentials
+   TS_OAUTH_CLIENT_ID=your-client-id
+   TS_OAUTH_CLIENT_SECRET=your-client-secret
+   TS_OAUTH_TAGS=tag:spacelift  # Optional, defaults to tag:spacelift
+   ```
+
+3. **Test**: Run a Spacelift plan/apply to verify OAuth authentication works
+
+4. **Cleanup**: Once confirmed working, remove the old `TS_AUTH_KEY` from your context
+
+**Benefits of OAuth over Auth Keys:**
+- No more 90-day expiration limits
+- Automatic token generation and renewal
+- Better security through scoped access
+- Audit trail of token generation
+
+## Building from Source
+
+If you prefer to build your own Docker image instead of using the pre-built ones:
+
+### Prerequisites
+
+- Docker with BuildKit support
+- Make (optional, for convenience)
+
+### Build Commands
+
+```bash
+# Clone the repository
+git clone https://github.com/nathanwasson/spacelift-tailscale-ansible.git
+cd spacelift-tailscale-ansible
+
+# Build the image locally
+make docker-build
+
+# Or build manually with Docker
+docker build -t my-spacelift-tailscale-ansible .
+
+# Build for multiple platforms (requires buildx)
+docker buildx build --platform linux/amd64,linux/arm64 -t my-spacelift-tailscale-ansible .
+```
+
+### Multi-stage Build Details
+
+The Dockerfile uses a multi-stage build process:
+
+1. **Builder stage**: Uses `golang:alpine` to compile the `get-authkey` utility
+2. **Runtime stage**: Uses the official Spacelift runner image with only the compiled binary
+
+This approach significantly reduces the final image size while maintaining all functionality.
+
+### CI/CD Pipeline
+
+The project uses GitHub Actions for automated building and publishing:
+
+- **Automated builds** on every push to main branch and pull requests
+- **Multi-platform images** built for linux/amd64 and linux/arm64
+- **GitHub Container Registry** publishing with multiple tag formats
+
+#### Available Tags
+
+The CI/CD pipeline generates several tag formats:
+
+- `latest` - Latest build from main branch
+- `sha-<commit>` - Specific commit SHA tags
+- `pr-<number>` - Pull request builds
+
 
 ## Howee Dunnit
 

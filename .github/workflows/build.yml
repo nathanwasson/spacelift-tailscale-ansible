@@ -8,6 +8,8 @@ on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
+  schedule:
+    - cron: "44 4 4 * *"
 
 jobs:
   build:
@@ -39,12 +41,15 @@ jobs:
         with:
           images: "ghcr.io/${{ github.repository }}"
           tags: |
-            # High priority ensures this used for image version
-            type=sha,format=long,prefix=,priority=1001
             # Latest for main branch
-            type=raw,enable={{is_default_branch}},priority=1,value=latest
+            type=raw,enable={{is_default_branch}},priority=200,value=latest
+            # SHA for all builds
+            type=sha,format=long,prefix=sha-,priority=100
+            # PR number for pull requests
+            type=ref,event=pr,prefix=pr-,priority=150
 
       - uses: "docker/build-push-action@v6"
+        id: "docker-build"
         with:
           context: "."
           platforms: "linux/amd64,linux/arm64"
